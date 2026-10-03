@@ -47,7 +47,7 @@ func (s Server) entryPost() http.HandlerFunc {
 		// any size they want.
 		id, err := s.insertFileFromRequest(r, expiration, picoshare.GuestLinkID(""))
 		if err != nil {
-			if _, ok := errors.AsType[*dbError](err); ok {
+			if _, ok := errors.AsType[dbError](err); ok {
 				log.Printf("failed to insert uploaded file into data store: %v", err)
 				http.Error(w, "failed to insert file into database", http.StatusInternalServerError)
 			} else {
@@ -130,7 +130,7 @@ func (s Server) guestEntryPost() http.HandlerFunc {
 
 		id, err := s.insertFileFromRequest(r, expiration, guestLinkID)
 		if err != nil {
-			if _, ok := errors.AsType[*dbError](err); ok {
+			if _, ok := errors.AsType[dbError](err); ok {
 				log.Printf("failed to insert uploaded file into data store: %v", err)
 				http.Error(w, "failed to insert file into database", http.StatusInternalServerError)
 			} else {
