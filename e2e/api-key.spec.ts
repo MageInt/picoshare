@@ -108,3 +108,67 @@ test("shows instructions for using the API", async ({ page }) => {
   await page.keyboard.press("Escape");
   await expect(dialog).toBeHidden();
 });
+
+test("allows the API key to delete files once the permission is enabled", async ({
+  page,
+  request,
+}) => {
+  await login(page);
+
+  await page.getByRole("menuitem", { name: "System" }).hover();
+  await page.getByRole("menuitem", { name: "Settings" }).click();
+  await expect(page).toHaveURL("/settings");
+
+  await page.getByRole("button", { name: "Generate API key" }).click();
+  await expect(page.getByText("Copy your new API key now.")).toBeVisible();
+  const apiKey = String(await page.locator("#api-key-value").textContent());
+  const headers = { Authorization: `Bearer ${apiKey}` };
+
+  let fileId = "";
+  {
+    const response = await request.post("/api/v1/files", {
+      headers,
+      multipart: {
+        file: {
+          name: "to-delete.txt",
+          mimeType: "text/plain",
+          buffer: Buffer.from("this file will be deleted"),
+        },
+      },
+    });
+    expect(response.status()).toBe(200);
+    fileId = (await response.json()).id;
+  }
+
+  {
+    const response = await request.delete(`/api/v1/files/${fileId}`, {
+      headers,
+    });
+    expect(response.status()).toBe(403);
+  }
+
+  const allowDelete = page.getByRole("checkbox", {
+    name: "Allow deleting files",
+  });
+  await expect(allowDelete).not.toBeChecked();
+  await allowDelete.check();
+  await expect(page.getByText("API key permissions saved")).toBeVisible();
+
+  await page.reload();
+  await expect(allowDelete).toBeChecked();
+  await expect(
+    page.getByRole("checkbox", { name: "Allow editing files" }),
+  ).not.toBeChecked();
+
+  {
+    const response = await request.delete(`/api/v1/files/${fileId}`, {
+      headers,
+    });
+    expect(response.status()).toBe(200);
+  }
+
+  {
+    const response = await request.get("/api/v1/files", { headers });
+    expect(await response.json()).toHaveLength(0);
+  }
+});

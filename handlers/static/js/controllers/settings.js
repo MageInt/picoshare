@@ -48,3 +48,28 @@ export async function apiKeyPost() {
       return Promise.reject(error);
     });
 }
+
+export async function apiKeyPermissionsPut(permissions) {
+  return fetch("/api/settings/api-key/permissions", {
+    method: "PUT",
+    credentials: "include",
+    body: JSON.stringify(permissions),
+  })
+    .then((response) => {
+      if (!response.ok) {
+        return response.text().then((error) => {
+          return Promise.reject(error);
+        });
+      }
+      return Promise.resolve();
+    })
+    .catch((error) => {
+      if (error.message) {
+        return Promise.reject(
+          "Failed to communicate with server" +
+            (error.message ? `: ${error.message}` : "."),
+        );
+      }
+      return Promise.reject(error);
+    });
+}

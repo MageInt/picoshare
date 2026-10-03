@@ -30,10 +30,18 @@ type APIKeyHash struct {
 	value [sha256.Size]byte
 }
 
+// APIKeyPermissions lists the operations an API key allows beyond uploading
+// and listing files.
+type APIKeyPermissions struct {
+	AllowEdit   bool
+	AllowDelete bool
+}
+
 // APIKeyRecord describes the API key that PicoShare currently accepts.
 type APIKeyRecord struct {
-	Hash    APIKeyHash
-	Created time.Time
+	Hash        APIKeyHash
+	Created     time.Time
+	Permissions APIKeyPermissions
 }
 
 // NewAPIKey generates a random API key.

@@ -9,11 +9,14 @@ func (s *Server) routes() {
 
 	// The API key routes must precede the session-authenticated /api subrouter,
 	// which would otherwise match them first. API keys grant access only to
-	// these routes, which never modify or delete existing files.
+	// these routes, and only keys with the matching permission can edit or
+	// delete files.
 	apiKeyApis := s.router.PathPrefix("/api/v1").Subrouter()
 	apiKeyApis.Use(s.requireAPIKey)
 	apiKeyApis.HandleFunc("/files", s.apiFilesGet()).Methods(http.MethodGet)
 	apiKeyApis.HandleFunc("/files", s.apiFilesPost()).Methods(http.MethodPost)
+	apiKeyApis.Handle("/files/{id}", requireAPIKeyPermission(canEditFiles, s.apiFilePatch())).Methods(http.MethodPatch)
+	apiKeyApis.Handle("/files/{id}", requireAPIKeyPermission(canDeleteFiles, s.apiFileDelete())).Methods(http.MethodDelete)
 
 	authenticatedApis := s.router.PathPrefix("/api").Subrouter()
 	authenticatedApis.Use(s.requireAuthentication)
@@ -26,6 +29,7 @@ func (s *Server) routes() {
 	authenticatedApis.HandleFunc("/guest-links/{id}/disable", s.guestLinksEnableDisable()).Methods(http.MethodPut)
 	authenticatedApis.HandleFunc("/settings", s.settingsPut()).Methods(http.MethodPut)
 	authenticatedApis.HandleFunc("/settings/api-key", s.apiKeyPost()).Methods(http.MethodPost)
+	authenticatedApis.HandleFunc("/settings/api-key/permissions", s.apiKeyPermissionsPut()).Methods(http.MethodPut)
 
 	publicApis := s.router.PathPrefix("/api").Subrouter()
 	publicApis.HandleFunc("/guest/{guestLinkID}", s.guestEntryPost()).Methods(http.MethodPost)

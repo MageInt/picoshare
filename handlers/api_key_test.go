@@ -268,7 +268,7 @@ func TestAPIFilesPost(t *testing.T) {
 	}
 }
 
-func TestAPIKeyCannotDeleteFiles(t *testing.T) {
+func TestAPIKeyWithoutPermissionsCannotModifyFiles(t *testing.T) {
 	for _, tt := range []struct {
 		explanation string
 		method      string
@@ -288,10 +288,16 @@ func TestAPIKeyCannotDeleteFiles(t *testing.T) {
 			status:      http.StatusUnauthorized,
 		},
 		{
-			explanation: "deleting through the API key routes should not be possible",
+			explanation: "deleting through the API key routes without the delete permission should be rejected",
 			method:      http.MethodDelete,
 			route:       "/api/v1/files/hR87apiUCj",
-			status:      http.StatusNotFound,
+			status:      http.StatusForbidden,
+		},
+		{
+			explanation: "editing through the API key routes without the edit permission should be rejected",
+			method:      http.MethodPatch,
+			route:       "/api/v1/files/hR87apiUCj",
+			status:      http.StatusForbidden,
 		},
 	} {
 		t.Run(tt.explanation, func(t *testing.T) {
@@ -444,5 +450,321 @@ func TestAPIKeyPostRequiresSession(t *testing.T) {
 
 	if got, want := rec.Code, http.StatusUnauthorized; got != want {
 		t.Errorf("status=%d, want=%d", got, want)
+	}
+}
+
+func TestAPIFilePatch(t *testing.T) {
+	for _, tt := range []struct {
+		explanation                 string
+		allowEdit                   bool
+		route                       string
+		payload                     string
+		status                      int
+		filenameExpected            string
+		noteExpected                string
+		expiresExpected             picoshare.ExpirationTime
+		passphraseProtectedExpected bool
+	}{
+		{
+			explanation:                 "renaming a file should change only its filename",
+			allowEdit:                   true,
+			route:                       "/api/v1/files/hR87apiUCj",
+			payload:                     `{"filename": "renamed.txt"}`,
+			status:                      http.StatusOK,
+			filenameExpected:            "renamed.txt",
+			noteExpected:                "original note",
+			expiresExpected:             mustParseExpirationTime("2030-01-01T00:00:00Z"),
+			passphraseProtectedExpected: true,
+		},
+		{
+			explanation:                 "an empty note and expiration should remove the note and make the file never expire",
+			allowEdit:                   true,
+			route:                       "/api/v1/files/hR87apiUCj",
+			payload:                     `{"note": "", "expiration": ""}`,
+			status:                      http.StatusOK,
+			filenameExpected:            "original.txt",
+			noteExpected:                "",
+			expiresExpected:             picoshare.NeverExpire,
+			passphraseProtectedExpected: true,
+		},
+		{
+			explanation:                 "an empty download passphrase should remove the passphrase",
+			allowEdit:                   true,
+			route:                       "/api/v1/files/hR87apiUCj",
+			payload:                     `{"downloadPassphrase": ""}`,
+			status:                      http.StatusOK,
+			filenameExpected:            "original.txt",
+			noteExpected:                "original note",
+			expiresExpected:             mustParseExpirationTime("2030-01-01T00:00:00Z"),
+			passphraseProtectedExpected: false,
+		},
+		{
+			explanation:                 "an invalid filename should be rejected without changing the file",
+			allowEdit:                   true,
+			route:                       "/api/v1/files/hR87apiUCj",
+			payload:                     `{"filename": "../etc/passwd"}`,
+			status:                      http.StatusBadRequest,
+			filenameExpected:            "original.txt",
+			noteExpected:                "original note",
+			expiresExpected:             mustParseExpirationTime("2030-01-01T00:00:00Z"),
+			passphraseProtectedExpected: true,
+		},
+		{
+			explanation:                 "editing a file that doesn't exist should return not found",
+			allowEdit:                   true,
+			route:                       "/api/v1/files/doesNotExt",
+			payload:                     `{"filename": "renamed.txt"}`,
+			status:                      http.StatusNotFound,
+			filenameExpected:            "original.txt",
+			noteExpected:                "original note",
+			expiresExpected:             mustParseExpirationTime("2030-01-01T00:00:00Z"),
+			passphraseProtectedExpected: true,
+		},
+		{
+			explanation:                 "a key without the edit permission should be rejected without changing the file",
+			allowEdit:                   false,
+			route:                       "/api/v1/files/hR87apiUCj",
+			payload:                     `{"filename": "renamed.txt"}`,
+			status:                      http.StatusForbidden,
+			filenameExpected:            "original.txt",
+			noteExpected:                "original note",
+			expiresExpected:             mustParseExpirationTime("2030-01-01T00:00:00Z"),
+			passphraseProtectedExpected: true,
+		},
+	} {
+		t.Run(tt.explanation, func(t *testing.T) {
+			dataStore := test_sqlite.New(t)
+			apiKey := "ps_0123456789abcdefghijABCDEFGHIJ0123456789"
+			if err := dataStore.UpdateAPIKey(picoshare.APIKeyRecord{
+				Hash:        mustCreateAPIKey(t, apiKey).Hash(),
+				Created:     mustParseTime("2025-01-01T00:00:00Z"),
+				Permissions: picoshare.APIKeyPermissions{AllowEdit: tt.allowEdit},
+			}); err != nil {
+				t.Fatalf("failed to store API key: %v", err)
+			}
+			note := "original note"
+			if err := dataStore.InsertEntry(strings.NewReader("dummy data"), picoshare.UploadMetadata{
+				ID:                 picoshare.MustCreateEntryID("hR87apiUCj"),
+				Filename:           "original.txt",
+				Note:               picoshare.FileNote{Value: &note},
+				Uploaded:           mustParseTime("2025-01-01T00:00:00Z"),
+				Expires:            mustParseExpirationTime("2030-01-01T00:00:00Z"),
+				Size:               mustParseFileSize(len("dummy data")),
+				DownloadPassphrase: mustCreateDownloadPassphrase(t, "secret passphrase"),
+			}); err != nil {
+				t.Fatalf("failed to insert entry: %v", err)
+			}
+			now := mustParseTime("2025-01-01T00:00:00Z")
+			s := handlers.New(unauthenticatedAuthenticator{}, &dataStore, nilSpaceCheckFunc, nilGarbageCollector, func() time.Time { return now })
+
+			req := httptest.NewRequest(http.MethodPatch, tt.route, strings.NewReader(tt.payload))
+			req.Header.Set("Authorization", "Bearer "+apiKey)
+			rec := httptest.NewRecorder()
+			s.Router().ServeHTTP(rec, req)
+
+			if got, want := rec.Code, tt.status; got != want {
+				t.Fatalf("status=%d, want=%d", got, want)
+			}
+
+			entry, err := dataStore.GetEntryMetadata(picoshare.MustCreateEntryID("hR87apiUCj"))
+			if err != nil {
+				t.Fatalf("failed to get entry: %v", err)
+			}
+			if got, want := entry.Filename.String(), tt.filenameExpected; got != want {
+				t.Errorf("filename=%s, want=%s", got, want)
+			}
+			gotNote := ""
+			if entry.Note.Value != nil {
+				gotNote = *entry.Note.Value
+			}
+			if got, want := gotNote, tt.noteExpected; got != want {
+				t.Errorf("note=%q, want=%q", got, want)
+			}
+			if got, want := entry.Expires, tt.expiresExpected; got != want {
+				t.Errorf("expires=%v, want=%v", got, want)
+			}
+			if got, want := !entry.DownloadPassphrase.Empty(), tt.passphraseProtectedExpected; got != want {
+				t.Errorf("passphrase protected=%v, want=%v", got, want)
+			}
+		})
+	}
+}
+
+func TestAPIFileDelete(t *testing.T) {
+	for _, tt := range []struct {
+		explanation         string
+		allowDelete         bool
+		route               string
+		status              int
+		entryExistsExpected bool
+	}{
+		{
+			explanation:         "a key with the delete permission should delete the file",
+			allowDelete:         true,
+			route:               "/api/v1/files/hR87apiUCj",
+			status:              http.StatusOK,
+			entryExistsExpected: false,
+		},
+		{
+			explanation:         "deleting a file that doesn't exist should return not found",
+			allowDelete:         true,
+			route:               "/api/v1/files/doesNotExt",
+			status:              http.StatusNotFound,
+			entryExistsExpected: true,
+		},
+		{
+			explanation:         "a key without the delete permission should be rejected and keep the file",
+			allowDelete:         false,
+			route:               "/api/v1/files/hR87apiUCj",
+			status:              http.StatusForbidden,
+			entryExistsExpected: true,
+		},
+	} {
+		t.Run(tt.explanation, func(t *testing.T) {
+			dataStore := test_sqlite.New(t)
+			apiKey := "ps_0123456789abcdefghijABCDEFGHIJ0123456789"
+			if err := dataStore.UpdateAPIKey(picoshare.APIKeyRecord{
+				Hash:        mustCreateAPIKey(t, apiKey).Hash(),
+				Created:     mustParseTime("2025-01-01T00:00:00Z"),
+				Permissions: picoshare.APIKeyPermissions{AllowDelete: tt.allowDelete},
+			}); err != nil {
+				t.Fatalf("failed to store API key: %v", err)
+			}
+			if err := dataStore.InsertEntry(strings.NewReader("dummy data"), picoshare.UploadMetadata{
+				ID:       picoshare.MustCreateEntryID("hR87apiUCj"),
+				Filename: "dummy.txt",
+				Uploaded: mustParseTime("2025-01-01T00:00:00Z"),
+				Expires:  picoshare.NeverExpire,
+				Size:     mustParseFileSize(len("dummy data")),
+			}); err != nil {
+				t.Fatalf("failed to insert entry: %v", err)
+			}
+			s := handlers.New(unauthenticatedAuthenticator{}, &dataStore, nilSpaceCheckFunc, nilGarbageCollector, time.Now)
+
+			req := httptest.NewRequest(http.MethodDelete, tt.route, nil)
+			req.Header.Set("Authorization", "Bearer "+apiKey)
+			rec := httptest.NewRecorder()
+			s.Router().ServeHTTP(rec, req)
+
+			if got, want := rec.Code, tt.status; got != want {
+				t.Errorf("status=%d, want=%d", got, want)
+			}
+
+			_, err := dataStore.GetEntryMetadata(picoshare.MustCreateEntryID("hR87apiUCj"))
+			if got, want := err == nil, tt.entryExistsExpected; got != want {
+				t.Errorf("entry exists=%v, want=%v (err=%v)", got, want, err)
+			}
+		})
+	}
+}
+
+func TestAPIKeyPermissionsPut(t *testing.T) {
+	for _, tt := range []struct {
+		explanation         string
+		apiKeyInStore       bool
+		payload             string
+		status              int
+		permissionsExpected picoshare.APIKeyPermissions
+	}{
+		{
+			explanation:   "enabling both permissions should save them",
+			apiKeyInStore: true,
+			payload:       `{"allowEdit": true, "allowDelete": true}`,
+			status:        http.StatusOK,
+			permissionsExpected: picoshare.APIKeyPermissions{
+				AllowEdit:   true,
+				AllowDelete: true,
+			},
+		},
+		{
+			explanation:   "enabling only editing should leave deleting disabled",
+			apiKeyInStore: true,
+			payload:       `{"allowEdit": true, "allowDelete": false}`,
+			status:        http.StatusOK,
+			permissionsExpected: picoshare.APIKeyPermissions{
+				AllowEdit:   true,
+				AllowDelete: false,
+			},
+		},
+		{
+			explanation:         "a request missing a permission should be rejected",
+			apiKeyInStore:       true,
+			payload:             `{"allowEdit": true}`,
+			status:              http.StatusBadRequest,
+			permissionsExpected: picoshare.APIKeyPermissions{},
+		},
+		{
+			explanation:         "setting permissions before generating a key should return not found",
+			apiKeyInStore:       false,
+			payload:             `{"allowEdit": true, "allowDelete": true}`,
+			status:              http.StatusNotFound,
+			permissionsExpected: picoshare.APIKeyPermissions{},
+		},
+	} {
+		t.Run(tt.explanation, func(t *testing.T) {
+			dataStore := test_sqlite.New(t)
+			if tt.apiKeyInStore {
+				if err := dataStore.UpdateAPIKey(picoshare.APIKeyRecord{
+					Hash:    mustCreateAPIKey(t, "ps_0123456789abcdefghijABCDEFGHIJ0123456789").Hash(),
+					Created: mustParseTime("2025-01-01T00:00:00Z"),
+				}); err != nil {
+					t.Fatalf("failed to store API key: %v", err)
+				}
+			}
+			s := handlers.New(mockAuthenticator{}, &dataStore, nilSpaceCheckFunc, nilGarbageCollector, time.Now)
+
+			req := httptest.NewRequest(http.MethodPut, "/api/settings/api-key/permissions", strings.NewReader(tt.payload))
+			rec := httptest.NewRecorder()
+			s.Router().ServeHTTP(rec, req)
+
+			if got, want := rec.Code, tt.status; got != want {
+				t.Fatalf("status=%d, want=%d", got, want)
+			}
+			if !tt.apiKeyInStore {
+				return
+			}
+
+			record, err := dataStore.ReadAPIKey()
+			if err != nil {
+				t.Fatalf("failed to read API key: %v", err)
+			}
+			if got, want := record.Permissions, tt.permissionsExpected; got != want {
+				t.Errorf("permissions=%+v, want=%+v", got, want)
+			}
+		})
+	}
+}
+
+func TestAPIKeyRegenerationKeepsPermissions(t *testing.T) {
+	dataStore := test_sqlite.New(t)
+	if err := dataStore.UpdateAPIKey(picoshare.APIKeyRecord{
+		Hash:    mustCreateAPIKey(t, "ps_0123456789abcdefghijABCDEFGHIJ0123456789").Hash(),
+		Created: mustParseTime("2025-01-01T00:00:00Z"),
+		Permissions: picoshare.APIKeyPermissions{
+			AllowEdit:   true,
+			AllowDelete: true,
+		},
+	}); err != nil {
+		t.Fatalf("failed to store API key: %v", err)
+	}
+	s := handlers.New(mockAuthenticator{}, &dataStore, nilSpaceCheckFunc, nilGarbageCollector, time.Now)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/settings/api-key", nil)
+	rec := httptest.NewRecorder()
+	s.Router().ServeHTTP(rec, req)
+
+	if got, want := rec.Code, http.StatusOK; got != want {
+		t.Fatalf("status=%d, want=%d", got, want)
+	}
+
+	record, err := dataStore.ReadAPIKey()
+	if err != nil {
+		t.Fatalf("failed to read API key: %v", err)
+	}
+	if record.Hash.Equal(mustCreateAPIKey(t, "ps_0123456789abcdefghijABCDEFGHIJ0123456789").Hash()) {
+		t.Errorf("regeneration should replace the API key")
+	}
+	if got, want := record.Permissions, (picoshare.APIKeyPermissions{AllowEdit: true, AllowDelete: true}); got != want {
+		t.Errorf("permissions=%+v, want=%+v", got, want)
 	}
 }

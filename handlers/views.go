@@ -664,6 +664,7 @@ func (s Server) settingsGet() http.HandlerFunc {
 			DefaultNeverExpire bool
 			APIKeyExists       bool
 			APIKeyCreated      string
+			APIKeyPermissions  picoshare.APIKeyPermissions
 			BaseURL            string
 		}{
 			commonProps:        makeCommonProps("PicoShare - Settings", r.Context()),
@@ -672,6 +673,7 @@ func (s Server) settingsGet() http.HandlerFunc {
 			DefaultNeverExpire: defaultNeverExpire,
 			APIKeyExists:       apiKeyExists,
 			APIKeyCreated:      apiKey.Created.Format(time.RFC3339),
+			APIKeyPermissions:  apiKey.Permissions,
 			BaseURL:            baseURLFromRequest(r),
 		})
 	}

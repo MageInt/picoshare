@@ -17,7 +17,11 @@
 
 {{ define "script-tags" }}
   <script type="module" nonce="{{ .CspNonce }}">
-    import { settingsPut, apiKeyPost } from "/js/controllers/settings.js";
+    import {
+      settingsPut,
+      apiKeyPost,
+      apiKeyPermissionsPut,
+    } from "/js/controllers/settings.js";
     import { showElement, hideElement } from "/js/lib/bulma.js";
     import { enableElement, disableElement } from "/js/lib/html.js";
     import { copyToClipboard } from "/js/lib/clipboard.js";
@@ -120,6 +124,9 @@
     const confirmRegenerateBtn = document.getElementById(
       "confirm-regenerate-api-key",
     );
+    const apiKeyPermissions = document.getElementById("api-key-permissions");
+    const allowEditCheckbox = document.getElementById("api-key-allow-edit");
+    const allowDeleteCheckbox = document.getElementById("api-key-allow-delete");
 
     function showApiKeyCreated(rawTimestamp) {
       const created = parseRfc3339(rawTimestamp);
@@ -130,7 +137,37 @@
       showElement(apiKeyStatus);
       hideElement(generateApiKeyBtn);
       showElement(regenerateApiKeyBtn);
+      showElement(apiKeyPermissions);
     }
+
+    function saveApiKeyPermissions(evt) {
+      hideElement(errorContainer);
+      disableElement(allowEditCheckbox);
+      disableElement(allowDeleteCheckbox);
+
+      apiKeyPermissionsPut({
+        allowEdit: allowEditCheckbox.checked,
+        allowDelete: allowDeleteCheckbox.checked,
+      })
+        .then(() => {
+          document
+            .querySelector("snackbar-notifications")
+            .addInfoMessage("API key permissions saved");
+        })
+        .catch((error) => {
+          // Restore the checkbox so it matches the permissions on the server.
+          evt.target.checked = !evt.target.checked;
+          document.getElementById("error-message").innerText = error;
+          showElement(errorContainer);
+        })
+        .finally(() => {
+          enableElement(allowEditCheckbox);
+          enableElement(allowDeleteCheckbox);
+        });
+    }
+
+    allowEditCheckbox.addEventListener("change", saveApiKeyPermissions);
+    allowDeleteCheckbox.addEventListener("change", saveApiKeyPermissions);
 
     function generateApiKey() {
       hideElement(errorContainer);
@@ -252,8 +289,8 @@
     <legend class="float-none w-auto px-2 fs-6 mb-0">API Key</legend>
 
     <p class="mt-3">
-      An API key lets scripts and other programs upload files and list your
-      files. It can't edit or delete files.
+      An API key lets scripts and other programs upload and list your files, and
+      optionally edit or delete them.
     </p>
 
     <p
@@ -285,6 +322,37 @@
           <i class="fa-solid fa-copy me-1"></i>
           Copy
         </button>
+      </div>
+    </div>
+
+    <div
+      id="api-key-permissions"
+      class="mb-3 {{ if not .APIKeyExists }}d-none{{ end }}"
+    >
+      <p class="mb-2">
+        The API key can always upload and list files. You can also allow it to:
+      </p>
+      <div class="form-check">
+        <input
+          class="form-check-input"
+          type="checkbox"
+          id="api-key-allow-edit"
+          {{ if .APIKeyPermissions.AllowEdit }}checked{{ end }}
+        />
+        <label class="form-check-label" for="api-key-allow-edit">
+          Allow editing files
+        </label>
+      </div>
+      <div class="form-check">
+        <input
+          class="form-check-input"
+          type="checkbox"
+          id="api-key-allow-delete"
+          {{ if .APIKeyPermissions.AllowDelete }}checked{{ end }}
+        />
+        <label class="form-check-label" for="api-key-allow-delete">
+          Allow deleting files
+        </label>
       </div>
     </div>
 
@@ -395,8 +463,10 @@
           ><code>Authorization: Bearer YOUR_API_KEY</code></pre>
           <p>
             Requests with a missing or invalid key receive
-            <code>401 Unauthorized</code>. The API can upload and list files,
-            but it can't edit or delete them.
+            <code>401 Unauthorized</code>. The API can always upload and list
+            files. Editing and deleting files require the matching permission in
+            these settings, otherwise the request receives
+            <code>403 Forbidden</code>.
           </p>
 
           <h3 class="h6 mt-4">List files</h3>
@@ -451,6 +521,43 @@
   "id": "abcdefghij",
   "url": "{{ .BaseURL }}/-abcdefghij"
 }</code></pre>
+
+          <h3 class="h6 mt-4">Edit a file</h3>
+          <p>Requires the <em>Allow editing files</em> permission.</p>
+          <pre class="bg-light border rounded p-2"><code>curl \
+  --request PATCH \
+  --header "Authorization: Bearer YOUR_API_KEY" \
+  --data '{"filename": "renamed.pdf", "note": "Final version"}' \
+  {{ .BaseURL }}/api/v1/files/abcdefghij</code></pre>
+          <p>
+            Send only the fields to change. The others keep their current
+            values:
+          </p>
+          <ul>
+            <li><code>filename</code>: the new filename.</li>
+            <li>
+              <code>expiration</code>: an RFC 3339 timestamp at least one hour
+              in the future, or an empty string to never expire.
+            </li>
+            <li>
+              <code>note</code>: the new note, or an empty string to remove it.
+            </li>
+            <li>
+              <code>downloadPassphrase</code>: the new passphrase, or an empty
+              string to remove it.
+            </li>
+          </ul>
+
+          <h3 class="h6 mt-4">Delete a file</h3>
+          <p>Requires the <em>Allow deleting files</em> permission.</p>
+          <pre class="bg-light border rounded p-2"><code>curl \
+  --request DELETE \
+  --header "Authorization: Bearer YOUR_API_KEY" \
+  {{ .BaseURL }}/api/v1/files/abcdefghij</code></pre>
+          <p>
+            Both requests return <code>404 Not Found</code> if the file doesn't
+            exist.
+          </p>
         </div>
         <div class="modal-footer">
           <button

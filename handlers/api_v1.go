@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -8,7 +9,11 @@ import (
 	"sort"
 	"time"
 
+	"github.com/gorilla/mux"
+
+	"github.com/mtlynch/picoshare/handlers/parse"
 	"github.com/mtlynch/picoshare/picoshare"
+	"github.com/mtlynch/picoshare/store"
 )
 
 type (
@@ -27,6 +32,16 @@ type (
 	apiFilePostResponse struct {
 		ID  string `json:"id"`
 		URL string `json:"url"`
+	}
+
+	// apiFilePatchRequest holds the metadata changes for an entry. A nil field
+	// leaves that part of the metadata unchanged.
+	apiFilePatchRequest struct {
+		ID                 picoshare.EntryID
+		Filename           *picoshare.Filename
+		Expires            *picoshare.ExpirationTime
+		Note               *picoshare.FileNote
+		DownloadPassphrase *picoshare.DownloadPassphrase
 	}
 )
 
@@ -106,6 +121,137 @@ func (s Server) apiFilesPost() http.HandlerFunc {
 			ID:  id.String(),
 			URL: entryURL(baseURLFromRequest(r), id),
 		})
+	}
+}
+
+func (s Server) apiFilePatch() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		req, err := s.parseAPIFilePatchRequest(r)
+		if err != nil {
+			log.Printf("invalid file edit request: %v", err)
+			http.Error(w, fmt.Sprintf("Invalid request: %v", err), http.StatusBadRequest)
+			return
+		}
+
+		metadata, err := s.store.GetEntryMetadata(req.ID)
+		if _, ok := errors.AsType[store.EntryNotFoundError](err); ok {
+			http.Error(w, "File not found", http.StatusNotFound)
+			return
+		} else if err != nil {
+			log.Printf("failed to retrieve entry %v: %v", req.ID, err)
+			http.Error(w, "Failed to retrieve file", http.StatusInternalServerError)
+			return
+		}
+
+		if req.Filename != nil {
+			metadata.Filename = *req.Filename
+		}
+		if req.Expires != nil {
+			metadata.Expires = *req.Expires
+		}
+		if req.Note != nil {
+			metadata.Note = *req.Note
+		}
+		if req.DownloadPassphrase != nil {
+			metadata.DownloadPassphrase = *req.DownloadPassphrase
+		}
+
+		if err := s.store.UpdateEntryMetadata(req.ID, metadata); err != nil {
+			log.Printf("failed to save metadata for entry %v: %v", req.ID, err)
+			http.Error(w, "Failed to save file", http.StatusInternalServerError)
+			return
+		}
+	}
+}
+
+func (s Server) parseAPIFilePatchRequest(r *http.Request) (apiFilePatchRequest, error) {
+	id, err := picoshare.EntryIDFromString(mux.Vars(r)["id"])
+	if err != nil {
+		return apiFilePatchRequest{}, err
+	}
+
+	var payload struct {
+		Filename           *string `json:"filename"`
+		Expiration         *string `json:"expiration"`
+		Note               *string `json:"note"`
+		DownloadPassphrase *string `json:"downloadPassphrase"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		return apiFilePatchRequest{}, err
+	}
+
+	req := apiFilePatchRequest{ID: id}
+
+	if payload.Filename != nil {
+		filename, err := parse.Filename(*payload.Filename)
+		if err != nil {
+			return apiFilePatchRequest{}, err
+		}
+		req.Filename = &filename
+	}
+
+	// An empty expiration makes the file never expire.
+	if payload.Expiration != nil {
+		expiration := picoshare.NeverExpire
+		if *payload.Expiration != "" {
+			expiration, err = parse.Expiration(*payload.Expiration, s.now())
+			if err != nil {
+				return apiFilePatchRequest{}, err
+			}
+		}
+		req.Expires = &expiration
+	}
+
+	// An empty note removes the file's note.
+	if payload.Note != nil {
+		note, err := parse.FileNote(*payload.Note)
+		if err != nil {
+			return apiFilePatchRequest{}, err
+		}
+		req.Note = &note
+	}
+
+	// An empty passphrase removes the file's download passphrase.
+	if payload.DownloadPassphrase != nil {
+		downloadPassphrase := picoshare.DownloadPassphrase{}
+		if *payload.DownloadPassphrase != "" {
+			downloadPassphrase, err = picoshare.NewDownloadPassphrase(*payload.DownloadPassphrase)
+			if err != nil {
+				return apiFilePatchRequest{}, err
+			}
+		}
+		req.DownloadPassphrase = &downloadPassphrase
+	}
+
+	return req, nil
+}
+
+func (s Server) apiFileDelete() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := picoshare.EntryIDFromString(mux.Vars(r)["id"])
+		if err != nil {
+			log.Printf("invalid entry ID: %v", err)
+			http.Error(w, fmt.Sprintf("Invalid file ID: %v", err), http.StatusBadRequest)
+			return
+		}
+
+		// DeleteEntry succeeds even when the entry doesn't exist, so check first
+		// to report missing files to the client.
+		if _, err := s.store.GetEntryMetadata(id); err != nil {
+			if _, ok := errors.AsType[store.EntryNotFoundError](err); ok {
+				http.Error(w, "File not found", http.StatusNotFound)
+				return
+			}
+			log.Printf("failed to retrieve entry %v: %v", id, err)
+			http.Error(w, "Failed to retrieve file", http.StatusInternalServerError)
+			return
+		}
+
+		if err := s.store.DeleteEntry(id); err != nil {
+			log.Printf("failed to delete entry %v: %v", id, err)
+			http.Error(w, "Failed to delete file", http.StatusInternalServerError)
+			return
+		}
 	}
 }
 
