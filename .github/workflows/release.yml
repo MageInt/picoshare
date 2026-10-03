@@ -1,0 +1,93 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - master
+
+# Serialize releases so that two pushes never compute the same version.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Run Go tests and static analysis
+        run: ./dev-scripts/run-go-tests
+
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Fetch all tags to find the latest release version.
+          fetch-depth: 0
+
+      - name: Compute the next version
+        id: version
+        run: |
+          set -euo pipefail
+          latest="$(git tag --list 'v*' --sort=-v:refname \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+            | head -n 1 || true)"
+          latest="${latest:-v0.0.0}"
+          IFS='.' read -r major minor patch <<< "${latest#v}"
+          version="v${major}.${minor}.$((patch + 1))"
+          echo "Previous version: ${latest}, next version: ${version}"
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "${GITHUB_OUTPUT}"
+
+      # Tag the local checkout before building so that the Go toolchain embeds
+      # the release version in the binary.
+      - name: Tag the release commit locally
+        run: git tag "${{ steps.version.outputs.version }}"
+
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push the Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
+          push: true
+          tags: |
+            ${{ steps.version.outputs.image }}:${{ steps.version.outputs.version }}
+            ${{ steps.version.outputs.image }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+          IMAGE: ${{ steps.version.outputs.image }}
+        run: |
+          set -euo pipefail
+          gh release create "${VERSION}" \
+            --target "${GITHUB_SHA}" \
+            --title "${VERSION}" \
+            --generate-notes \
+            --notes "$(printf '%s\n\n%s\n\n%s\n' \
+              '## Docker image' \
+              "Platforms: linux/amd64, linux/arm64, linux/arm/v7" \
+              "\`docker pull ${IMAGE}:${VERSION}\`")"
