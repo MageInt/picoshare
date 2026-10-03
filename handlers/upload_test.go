@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -18,6 +19,7 @@ import (
 	"github.com/mtlynch/picoshare/handlers/auth/shared_secret"
 	"github.com/mtlynch/picoshare/handlers/parse"
 	"github.com/mtlynch/picoshare/picoshare"
+	"github.com/mtlynch/picoshare/store/sqlite"
 	"github.com/mtlynch/picoshare/store/test_sqlite"
 )
 
@@ -1015,4 +1017,69 @@ func mustParseFileSize(val int) picoshare.FileSize {
 	}
 
 	return fileSize
+}
+
+// insertFailingStore is a data store whose InsertEntry always fails.
+type insertFailingStore struct {
+	sqlite.Store
+}
+
+func (insertFailingStore) InsertEntry(io.Reader, picoshare.UploadMetadata) error {
+	return errors.New("dummy database failure")
+}
+
+func TestUploadReportsDatabaseFailureAsServerError(t *testing.T) {
+	for _, tt := range []struct {
+		explanation string
+		route       string
+		status      int
+	}{
+		{
+			explanation: "an authenticated upload that fails to save should return a server error",
+			route:       "/api/entry?expiration=2040-01-01T00:00:00Z",
+			status:      http.StatusInternalServerError,
+		},
+		{
+			explanation: "a guest upload that fails to save should return a server error",
+			route:       "/api/guest/abcdefgh23456789",
+			status:      http.StatusInternalServerError,
+		},
+		{
+			explanation: "an API key upload that fails to save should return a server error",
+			route:       "/api/v1/files",
+			status:      http.StatusInternalServerError,
+		},
+	} {
+		t.Run(tt.explanation, func(t *testing.T) {
+			dataStore := test_sqlite.New(t)
+			if err := dataStore.InsertGuestLink(picoshare.GuestLink{
+				ID:              picoshare.GuestLinkID("abcdefgh23456789"),
+				Created:         mustParseTime("2022-05-26T00:00:00Z"),
+				UrlExpires:      mustParseExpirationTime("2030-01-02T03:04:25Z"),
+				MaxFileLifetime: picoshare.FileLifetimeInfinite,
+			}); err != nil {
+				t.Fatalf("failed to insert dummy guest link: %v", err)
+			}
+			apiKey := "ps_0123456789abcdefghijABCDEFGHIJ0123456789"
+			if err := dataStore.UpdateAPIKey(picoshare.APIKeyRecord{
+				Hash:    mustCreateAPIKey(t, apiKey).Hash(),
+				Created: mustParseTime("2024-01-01T00:00:00Z"),
+			}); err != nil {
+				t.Fatalf("failed to store API key: %v", err)
+			}
+			now := mustParseTime("2024-01-01T00:00:00Z")
+			s := handlers.New(mockAuthenticator{}, &insertFailingStore{dataStore}, nilSpaceCheckFunc, nilGarbageCollector, func() time.Time { return now })
+
+			formData, contentType := createMultipartFormBody("dummy.txt", "", "", strings.NewReader("dummy bytes"))
+			req := httptest.NewRequest(http.MethodPost, tt.route, formData)
+			req.Header.Set("Content-Type", contentType)
+			req.Header.Set("Authorization", "Bearer "+apiKey)
+			rec := httptest.NewRecorder()
+			s.Router().ServeHTTP(rec, req)
+
+			if got, want := rec.Code, tt.status; got != want {
+				t.Errorf("status=%d, want=%d", got, want)
+			}
+		})
+	}
 }

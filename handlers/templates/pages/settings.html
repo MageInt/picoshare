@@ -3,14 +3,25 @@
     #default-expiration {
       max-width: 9ch;
     }
+
+    #api-key-value {
+      word-break: break-all;
+    }
+
+    #api-help-dialog pre {
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
   </style>
 {{ end }}
 
 {{ define "script-tags" }}
   <script type="module" nonce="{{ .CspNonce }}">
-    import { settingsPut } from "/js/controllers/settings.js";
+    import { settingsPut, apiKeyPost } from "/js/controllers/settings.js";
     import { showElement, hideElement } from "/js/lib/bulma.js";
     import { enableElement, disableElement } from "/js/lib/html.js";
+    import { copyToClipboard } from "/js/lib/clipboard.js";
+    import { parseRfc3339, formatRfc3339Local } from "/js/lib/time.js";
 
     const errorContainer = document.getElementById("error");
     const progressSpinner = document.getElementById("progress-spinner");
@@ -99,6 +110,67 @@
           });
       });
 
+    const apiKeyStatus = document.getElementById("api-key-status");
+    const apiKeyCreated = document.getElementById("api-key-created");
+    const apiKeyMissing = document.getElementById("api-key-missing");
+    const apiKeyNew = document.getElementById("api-key-new");
+    const apiKeyValue = document.getElementById("api-key-value");
+    const generateApiKeyBtn = document.getElementById("generate-api-key");
+    const regenerateApiKeyBtn = document.getElementById("regenerate-api-key");
+    const confirmRegenerateBtn = document.getElementById(
+      "confirm-regenerate-api-key",
+    );
+
+    function showApiKeyCreated(rawTimestamp) {
+      const created = parseRfc3339(rawTimestamp);
+      apiKeyCreated.innerText = created
+        ? formatRfc3339Local(created)
+        : rawTimestamp;
+      hideElement(apiKeyMissing);
+      showElement(apiKeyStatus);
+      hideElement(generateApiKeyBtn);
+      showElement(regenerateApiKeyBtn);
+    }
+
+    function generateApiKey() {
+      hideElement(errorContainer);
+      disableElement(generateApiKeyBtn);
+      disableElement(regenerateApiKeyBtn);
+
+      apiKeyPost()
+        .then((result) => {
+          apiKeyValue.innerText = result.apiKey;
+          showElement(apiKeyNew);
+          showApiKeyCreated(result.created);
+          document
+            .querySelector("snackbar-notifications")
+            .addInfoMessage("API key generated");
+        })
+        .catch((error) => {
+          document.getElementById("error-message").innerText = error;
+          showElement(errorContainer);
+        })
+        .finally(() => {
+          enableElement(generateApiKeyBtn);
+          enableElement(regenerateApiKeyBtn);
+        });
+    }
+
+    if (apiKeyStatus.dataset.created) {
+      showApiKeyCreated(apiKeyStatus.dataset.created);
+    }
+
+    generateApiKeyBtn.addEventListener("click", generateApiKey);
+    confirmRegenerateBtn.addEventListener("click", generateApiKey);
+
+    document.getElementById("copy-api-key").addEventListener("click", () => {
+      copyToClipboard(apiKeyValue.innerText).then(() => {
+        document
+          .querySelector("snackbar-notifications")
+          .addInfoMessage("API key copied to clipboard");
+      });
+    });
+
     document
       .querySelector("#error .btn-close")
       .addEventListener("click", () => {
@@ -173,6 +245,225 @@
       </button>
     </div>
   </form>
+
+  <h2 class="h3 mt-5">API</h2>
+
+  <fieldset class="border rounded p-3 mb-4 form-panel">
+    <legend class="float-none w-auto px-2 fs-6 mb-0">API Key</legend>
+
+    <p class="mt-3">
+      An API key lets scripts and other programs upload files and list your
+      files. It can't edit or delete files.
+    </p>
+
+    <p
+      id="api-key-status"
+      class="d-none"
+      {{ if .APIKeyExists }}data-created="{{ .APIKeyCreated }}"{{ end }}
+    >
+      <i class="fa-solid fa-key me-2"></i>
+      API key created on <time id="api-key-created"></time>
+    </p>
+    <p id="api-key-missing" {{ if .APIKeyExists }}class="d-none"{{ end }}>
+      No API key exists yet.
+    </p>
+
+    <div id="api-key-new" class="alert alert-warning d-none" role="status">
+      <p class="mb-2">
+        <strong>Copy your new API key now.</strong> PicoShare stores only a hash
+        of the key, so you won't be able to see it again.
+      </p>
+      <div class="d-flex align-items-start gap-2">
+        <code id="api-key-value" class="flex-grow-1 p-2 bg-light border rounded"
+          >{{/* Populated by JavaScript. */}}</code
+        >
+        <button
+          id="copy-api-key"
+          class="btn btn-outline-secondary"
+          type="button"
+        >
+          <i class="fa-solid fa-copy me-1"></i>
+          Copy
+        </button>
+      </div>
+    </div>
+
+    <div class="d-flex flex-wrap gap-2">
+      <button
+        id="generate-api-key"
+        class="btn btn-primary {{ if .APIKeyExists }}d-none{{ end }}"
+        type="button"
+      >
+        <i class="fa-solid fa-key me-2"></i>
+        Generate API key
+      </button>
+      <button
+        id="regenerate-api-key"
+        class="btn btn-outline-danger {{ if not .APIKeyExists }}d-none{{ end }}"
+        type="button"
+        data-bs-toggle="modal"
+        data-bs-target="#regenerate-api-key-dialog"
+      >
+        <i class="fa-solid fa-rotate me-2"></i>
+        Regenerate API key
+      </button>
+      <button
+        class="btn btn-outline-secondary"
+        type="button"
+        data-bs-toggle="modal"
+        data-bs-target="#api-help-dialog"
+      >
+        <i class="fa-solid fa-circle-question me-2"></i>
+        How to use the API
+      </button>
+    </div>
+  </fieldset>
+
+  <div
+    id="regenerate-api-key-dialog"
+    class="modal fade"
+    tabindex="-1"
+    aria-labelledby="regenerate-api-key-title"
+    aria-hidden="true"
+  >
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2 id="regenerate-api-key-title" class="modal-title fs-5">
+            Regenerate API key?
+          </h2>
+          <button
+            type="button"
+            class="btn-close"
+            data-bs-dismiss="modal"
+            aria-label="Close"
+          ></button>
+        </div>
+        <div class="modal-body">
+          The current API key will stop working immediately. Any script that
+          uses it will need the new key.
+        </div>
+        <div class="modal-footer">
+          <button
+            type="button"
+            class="btn btn-secondary"
+            data-bs-dismiss="modal"
+          >
+            Cancel
+          </button>
+          <button
+            id="confirm-regenerate-api-key"
+            type="button"
+            class="btn btn-danger"
+            data-bs-dismiss="modal"
+          >
+            Regenerate
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div
+    id="api-help-dialog"
+    class="modal fade"
+    tabindex="-1"
+    aria-labelledby="api-help-title"
+    aria-hidden="true"
+  >
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2 id="api-help-title" class="modal-title fs-5">
+            How to use the API
+          </h2>
+          <button
+            type="button"
+            class="btn-close"
+            data-bs-dismiss="modal"
+            aria-label="Close"
+          ></button>
+        </div>
+        <div class="modal-body">
+          <h3 class="h6">Authentication</h3>
+          <p>
+            Send your API key in the <code>Authorization</code> header of every
+            request:
+          </p>
+          <pre
+            class="bg-light border rounded p-2"
+          ><code>Authorization: Bearer YOUR_API_KEY</code></pre>
+          <p>
+            Requests with a missing or invalid key receive
+            <code>401 Unauthorized</code>. The API can upload and list files,
+            but it can't edit or delete them.
+          </p>
+
+          <h3 class="h6 mt-4">List files</h3>
+          <pre class="bg-light border rounded p-2"><code>curl \
+  --header "Authorization: Bearer YOUR_API_KEY" \
+  {{ .BaseURL }}/api/v1/files</code></pre>
+          <p>
+            The response is a JSON array, sorted from newest to oldest upload:
+          </p>
+          <pre class="bg-light border rounded p-2"><code>[
+  {
+    "id": "abcdefghij",
+    "filename": "report.pdf",
+    "url": "{{ .BaseURL }}/-abcdefghij",
+    "size": 52341,
+    "contentType": "application/pdf",
+    "uploaded": "2026-01-01T12:00:00Z",
+    "expires": "2026-01-31T12:00:00Z",
+    "note": null,
+    "downloadCount": 3
+  }
+]</code></pre>
+          <p>
+            <code>expires</code> is <code>null</code> for files that never
+            expire.
+          </p>
+
+          <h3 class="h6 mt-4">Upload a file</h3>
+          <pre class="bg-light border rounded p-2"><code>curl \
+  --header "Authorization: Bearer YOUR_API_KEY" \
+  --form "file=@report.pdf" \
+  {{ .BaseURL }}/api/v1/files</code></pre>
+          <p>Optional fields:</p>
+          <ul>
+            <li>
+              <code>expiration</code> URL parameter: an RFC 3339 timestamp at
+              least one hour in the future, such as
+              <code>?expiration=2026-12-31T00:00:00Z</code>. Without it, the
+              file uses the default expiration from these settings.
+            </li>
+            <li>
+              <code>note</code> form field: a note visible only to you, such as
+              <code>--form "note=Quarterly report"</code>.
+            </li>
+            <li>
+              <code>downloadPassphrase</code> form field: a passphrase that
+              recipients must enter to download the file.
+            </li>
+          </ul>
+          <p>The response contains the new file's ID and download link:</p>
+          <pre class="bg-light border rounded p-2"><code>{
+  "id": "abcdefghij",
+  "url": "{{ .BaseURL }}/-abcdefghij"
+}</code></pre>
+        </div>
+        <div class="modal-footer">
+          <button
+            type="button"
+            class="btn btn-secondary"
+            data-bs-dismiss="modal"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <div class="fa-3x d-none" id="progress-spinner">
     <i class="fa-solid fa-spinner fa-spin"></i>
