@@ -90,12 +90,14 @@ if [[ "${gci_version_output:-}" != "gci version ${GCI_VERSION#v}" ]]; then
   CGO_ENABLED=0 go install "github.com/daixiang0/gci@${GCI_VERSION}"
 fi
 readonly GCI_PATH
+# gci also formats stdin whenever stdin isn't a terminal, so it fails with
+# "StdIn:1:1: expected 'package', found 'EOF'" when CI pipes an empty stdin.
 GCI_DIFF=$("${GCI_PATH}" diff \
   --skip-generated \
   --section standard \
   --section default \
   --section "prefix(github.com/mtlynch/picoshare)" \
-  "${GO_PACKAGE_DIRS[@]}")
+  "${GO_PACKAGE_DIRS[@]}" < /dev/null)
 readonly GCI_DIFF
 if [[ -n "${GCI_DIFF}" ]]; then
   echo "${GCI_DIFF}"
