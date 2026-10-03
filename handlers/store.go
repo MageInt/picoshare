@@ -23,4 +23,6 @@ type Store interface {
 	GetEntryDownloads(id picoshare.EntryID) ([]picoshare.DownloadRecord, error)
 	ReadSettings() (picoshare.Settings, error)
 	UpdateSettings(picoshare.Settings) error
+	ReadAPIKey() (picoshare.APIKeyRecord, error)
+	UpdateAPIKey(picoshare.APIKeyRecord) error
 }

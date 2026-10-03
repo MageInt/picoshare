@@ -23,3 +23,10 @@ type GuestLinkNotFoundError struct {
 func (f GuestLinkNotFoundError) Error() string {
 	return fmt.Sprintf("Could not find guest link with ID %v", f.ID)
 }
+
+// APIKeyNotFoundError occurs when no API key has been generated.
+type APIKeyNotFoundError struct{}
+
+func (f APIKeyNotFoundError) Error() string {
+	return "No API key exists"
+}

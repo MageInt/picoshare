@@ -647,16 +647,32 @@ func (s Server) settingsGet() http.HandlerFunc {
 			}
 		}
 
+		apiKeyExists := true
+		apiKey, err := s.store.ReadAPIKey()
+		if _, ok := errors.AsType[store.APIKeyNotFoundError](err); ok {
+			apiKeyExists = false
+		} else if err != nil {
+			log.Printf("failed to read API key: %v", err)
+			http.Error(w, "failed to read API key from database", http.StatusInternalServerError)
+			return
+		}
+
 		renderTemplate(w, t, struct {
 			commonProps
 			DefaultExpiration  uint16
 			ExpirationTimeUnit string
 			DefaultNeverExpire bool
+			APIKeyExists       bool
+			APIKeyCreated      string
+			BaseURL            string
 		}{
 			commonProps:        makeCommonProps("PicoShare - Settings", r.Context()),
 			DefaultExpiration:  defaultExpiration,
 			ExpirationTimeUnit: expirationTimeUnit,
 			DefaultNeverExpire: defaultNeverExpire,
+			APIKeyExists:       apiKeyExists,
+			APIKeyCreated:      apiKey.Created.Format(time.RFC3339),
+			BaseURL:            baseURLFromRequest(r),
 		})
 	}
 }

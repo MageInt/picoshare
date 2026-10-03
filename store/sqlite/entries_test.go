@@ -205,6 +205,43 @@ func TestGetEntriesMetadataOmitsDownloadPassphrase(t *testing.T) {
 	}
 }
 
+func TestGetEntriesMetadataCountsDownloads(t *testing.T) {
+	dataStore := test_sqlite.New(t)
+	data := "dummy data"
+	if err := dataStore.InsertEntry(strings.NewReader(data), picoshare.UploadMetadata{
+		ID:       picoshare.MustCreateEntryID("abcdefghij"),
+		Filename: "dummy-file.txt",
+		Uploaded: mustParseTime("2025-05-25T00:00:00Z"),
+		Expires:  mustParseExpirationTime("2040-01-01T00:00:00Z"),
+		Size:     mustParseFileSize(len(data)),
+	}); err != nil {
+		t.Fatalf("failed to insert file into sqlite: %v", err)
+	}
+	for _, downloadTime := range []string{
+		"2025-05-26T00:00:00Z",
+		"2025-05-27T00:00:00Z",
+	} {
+		if err := dataStore.InsertEntryDownload(picoshare.MustCreateEntryID("abcdefghij"), picoshare.DownloadRecord{
+			Time:      mustParseTime(downloadTime),
+			ClientIP:  "203.0.113.1",
+			UserAgent: "curl/8.0",
+		}); err != nil {
+			t.Fatalf("failed to record download: %v", err)
+		}
+	}
+
+	entries, err := dataStore.GetEntriesMetadata()
+	if err != nil {
+		t.Fatalf("failed to retrieve entries metadata: %v", err)
+	}
+	if got, want := len(entries), 1; got != want {
+		t.Fatalf("entries count=%d, want=%d", got, want)
+	}
+	if got, want := entries[0].DownloadCount, uint64(2); got != want {
+		t.Errorf("download count=%d, want=%d", got, want)
+	}
+}
+
 func mustParseTime(s string) time.Time {
 	t, err := time.Parse(time.RFC3339, s)
 	if err != nil {
