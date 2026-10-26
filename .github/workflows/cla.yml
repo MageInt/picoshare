@@ -7,6 +7,8 @@ on:
 
 jobs:
   CLAssistant:
+    # The CLA covers contributions to the upstream project only.
+    if: github.repository == 'mtlynch/picoshare'
     runs-on: ubuntu-latest
     steps:
       - name: "CLA Assistant"

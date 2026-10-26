@@ -1,0 +1,83 @@
+# Checks every PR: Go tests and static analysis, then builds the image, starts
+# it and logs in with the shared secret. Nothing is published.
+# Minor and patch Dependabot PRs are then merged and released automatically.
+name: CI
+
+on:
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Run Go tests and static analysis
+        run: ./dev-scripts/run-go-tests
+
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build the Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          pull: true
+          load: true
+          tags: picoshare:ci
+          cache-from: type=gha
+
+      - name: Start the image and log in
+        run: |
+          docker run -d --name ps -p 4001:4001 \
+            -e PORT=4001 -e PS_SHARED_SECRET=ci-secret picoshare:ci
+          for i in $(seq 1 30); do
+            if curl -fsS -o /dev/null \
+              -H 'Content-Type: application/json' \
+              -d '{"sharedSecretKey":"ci-secret"}' \
+              http://127.0.0.1:4001/api/auth; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs ps
+          exit 1
+
+  # Merges only after tests and the image check pass. Major updates are left
+  # for manual review.
+  dependabot-merge:
+    needs: [test, image]
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write # start release.yml
+    steps:
+      - id: meta
+        uses: dependabot/fetch-metadata@v2
+
+      - name: Merge and release
+        if: steps.meta.outputs.update-type != 'version-update:semver-major'
+        run: |
+          gh pr merge --squash --delete-branch "$PR_URL"
+          # A merge made with GITHUB_TOKEN does not trigger the push workflow,
+          # so start the release manually.
+          gh workflow run release.yml --ref master
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
