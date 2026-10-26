@@ -60,6 +60,10 @@ PS_LAUNCH_CMD="$(quote_litestream_command /app/picoshare "${PS_PROCESS_ARGS[@]}"
 readonly PS_LAUNCH_CMD
 
 if [[ "${IS_LITESTREAM_ENABLED}" == 'true' ]]; then
+  if [[ ! -x /app/litestream ]]; then
+    echo "LITESTREAM_BUCKET is set, but this image does not include Litestream." >&2
+    exit 1
+  fi
   /app/litestream version
   echo "LITESTREAM_BUCKET=${LITESTREAM_BUCKET}"
   echo "LITESTREAM_ENDPOINT=${LITESTREAM_ENDPOINT}"

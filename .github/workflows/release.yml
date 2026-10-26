@@ -4,6 +4,13 @@ on:
   push:
     branches:
       - master
+  # Manual runs (including those started after a Dependabot merge) make a
+  # normal release.
+  workflow_dispatch:
+  # Weekly rebuild without cache to pick up Go and Alpine security fixes. It
+  # only refreshes the latest tag and creates no new version.
+  schedule:
+    - cron: "0 4 * * 1"
 
 # Serialize releases so that two pushes never compute the same version.
 concurrency:
@@ -54,6 +61,7 @@ jobs:
       # Tag the local checkout before building so that the Go toolchain embeds
       # the release version in the binary.
       - name: Tag the release commit locally
+        if: github.event_name != 'schedule'
         run: git tag "${{ steps.version.outputs.version }}"
 
       - uses: docker/setup-buildx-action@v3
@@ -70,13 +78,18 @@ jobs:
           context: .
           platforms: linux/amd64
           push: true
+          pull: true
+          # Without cache on the weekly rebuild, or the apk upgrade layer would
+          # never change.
+          no-cache: ${{ github.event_name == 'schedule' }}
           tags: |
-            ${{ steps.version.outputs.image }}:${{ steps.version.outputs.version }}
             ${{ steps.version.outputs.image }}:latest
+            ${{ github.event_name != 'schedule' && format('{0}:{1}', steps.version.outputs.image, steps.version.outputs.version) || '' }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
       - name: Create the GitHub release
+        if: github.event_name != 'schedule'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.version.outputs.version }}

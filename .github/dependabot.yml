@@ -1,0 +1,31 @@
+# Automatic dependency updates. Minor and patch PRs are merged automatically
+# when CI passes (see ci.yml).
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "03:00"
+      timezone: Europe/Paris
+    groups:
+      go-minor-patch:
+        update-types: [minor, patch]
+
+  # Base images in the Dockerfile (golang, debian, alpine).
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "03:00"
+      timezone: Europe/Paris
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]
