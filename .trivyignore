@@ -1,0 +1,4 @@
+# DS-0002 : l'image tourne en root. Passer à un utilisateur dédié changerait le
+# propriétaire attendu de /data (base SQLite + litestream) et casserait les volumes
+# déjà déployés. À revoir avec une migration des droits du volume.
+DS-0002
