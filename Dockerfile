@@ -25,7 +25,7 @@ COPY --from=builder /app/bin/picoshare ./
 # Litestream is not included: its 0.3 release line ships Go 1.21 and 2023
 # dependencies with known vulnerabilities, and this deployment does not
 # replicate to S3. docker-entrypoint refuses to start if LITESTREAM_BUCKET is set.
-FROM alpine:3.24
+FROM alpine:3.24.4
 
 # Apply Alpine security fixes released since the base image was published.
 RUN apk upgrade --no-cache && apk add --no-cache bash

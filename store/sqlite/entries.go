@@ -76,6 +76,10 @@ func (s Store) GetEntriesMetadata() ([]picoshare.UploadMetadata, error) {
 		if err != nil {
 			return []picoshare.UploadMetadata{}, err
 		}
+		expiration, err := picoshare.NewExpirationTime(et)
+		if err != nil {
+			return []picoshare.UploadMetadata{}, fmt.Errorf("failed to parse expiration time from database: %w", err)
+		}
 
 		fileSize, err := picoshare.FileSizeFromUint64(fileSizeRaw)
 		if err != nil {
@@ -88,7 +92,7 @@ func (s Store) GetEntriesMetadata() ([]picoshare.UploadMetadata, error) {
 			Note:          picoshare.FileNote{Value: note},
 			ContentType:   picoshare.ContentType(contentType),
 			Uploaded:      ut,
-			Expires:       picoshare.ExpirationTime(et),
+			Expires:       expiration,
 			Size:          fileSize,
 			DownloadCount: downloadCount,
 		})
@@ -162,6 +166,10 @@ func (s Store) GetEntryMetadata(id picoshare.EntryID) (picoshare.UploadMetadata,
 	if err != nil {
 		return picoshare.UploadMetadata{}, err
 	}
+	expiration, err := picoshare.NewExpirationTime(et)
+	if err != nil {
+		return picoshare.UploadMetadata{}, fmt.Errorf("failed to parse expiration time from database: %w", err)
+	}
 
 	fileSize, err := picoshare.FileSizeFromUint64(fileSizeRaw)
 	if err != nil {
@@ -179,7 +187,7 @@ func (s Store) GetEntryMetadata(id picoshare.EntryID) (picoshare.UploadMetadata,
 		Note:               picoshare.FileNote{Value: note},
 		ContentType:        picoshare.ContentType(contentType),
 		Uploaded:           ut,
-		Expires:            picoshare.ExpirationTime(et),
+		Expires:            expiration,
 		Size:               fileSize,
 		DownloadPassphrase: downloadPassphrase,
 	}, nil
