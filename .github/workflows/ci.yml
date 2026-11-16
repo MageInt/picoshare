@@ -3,12 +3,20 @@
 # with the shared secret. Nothing is published.
 # Minor and patch Dependabot PRs ("-mineures" groups) are then merged and
 # released automatically.
+# Également appelé comme workflow réutilisable par upstream-sync.yml, sur le
+# commit de fusion passé dans l'input "ref" (dependabot-merge y reste inactif).
 # Actions are pinned to a commit SHA and updated by Dependabot.
 name: CI
 
 on:
   pull_request:
     branches: [master]
+  workflow_call:
+    inputs:
+      ref:
+        description: "Commit à vérifier (vide : celui de l'événement)"
+        type: string
+        default: ""
 
 permissions: {}
 
@@ -25,6 +33,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ inputs.ref }}
           persist-credentials: false
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -42,6 +51,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ inputs.ref }}
           persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -62,6 +72,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ inputs.ref }}
           persist-credentials: false
 
       - name: Vulnerable dependencies, secrets and misconfigurations
@@ -81,6 +92,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ inputs.ref }}
           persist-credentials: false
 
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
@@ -124,6 +136,7 @@ jobs:
   dependabot-merge:
     needs: [test, frontend, scan, image]
     if: >-
+      github.event_name == 'pull_request' &&
       github.event.pull_request.user.login == 'dependabot[bot]' &&
       contains(github.event.pull_request.head.ref, '-mineures')
     runs-on: ubuntu-latest

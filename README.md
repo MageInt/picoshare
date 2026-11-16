@@ -8,6 +8,10 @@
 [![Contributors](https://img.shields.io/github/contributors/mtlynch/picoshare)](https://github.com/mtlynch/picoshare/graphs/contributors)
 [![License](http://img.shields.io/:license-agpl-blue.svg?style=flat-square)](LICENSE)
 
+## Fork MageInt
+
+Ce fork se synchronise seul avec [mtlynch/picoshare](https://github.com/mtlynch/picoshare) chaque mardi (`.github/workflows/upstream-sync.yml`) : vrai commit de merge d'`upstream/master` en gardant le `.github/` du fork, refus si deux migrations de `store/sqlite/migrations/` ont le même numéro, CI complète sur la branche `upstream-sync`, puis fast-forward de `master` et release. En cas de conflit ou de CI rouge, `master` n'est pas touché et une issue « Synchro upstream à faire à la main » (label `upstream-sync`) est ouverte. Lancement manuel possible avec `dry_run` (ni `master` ni release).
+
 ## Overview
 
 PicoShare is a minimalist, self-hosted web app that makes it easy to share files on the web without restrictions on size, file type, or media format.
