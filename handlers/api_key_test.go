@@ -12,6 +12,7 @@ import (
 	"github.com/mtlynch/picoshare/handlers"
 	"github.com/mtlynch/picoshare/picoshare"
 	"github.com/mtlynch/picoshare/store/test_sqlite"
+	"github.com/mtlynch/picoshare/testutil"
 )
 
 func mustCreateAPIKey(t *testing.T, raw string) picoshare.APIKey {
@@ -117,7 +118,7 @@ func TestAPIFilesGetListsFiles(t *testing.T) {
 		Filename:           "newer.txt",
 		ContentType:        "text/plain",
 		Uploaded:           mustParseTime("2025-02-01T00:00:00Z"),
-		Expires:            mustParseExpirationTime("2030-01-01T00:00:00Z"),
+		Expires:            testutil.MustParseExpirationTime(t, "2030-01-01T00:00:00Z"),
 		Size:               mustParseFileSize(len("newer file")),
 		DownloadPassphrase: mustCreateDownloadPassphrase(t, "secret passphrase"),
 	}); err != nil {
@@ -261,7 +262,7 @@ func TestAPIFilesPost(t *testing.T) {
 			if got, want := entry.Filename.String(), "upload.txt"; got != want {
 				t.Errorf("filename=%s, want=%s", got, want)
 			}
-			if got, want := entry.Expires, mustParseExpirationTime(tt.expiresExpected); got != want {
+			if got, want := entry.Expires, testutil.MustParseExpirationTime(t, tt.expiresExpected); got != want {
 				t.Errorf("expires=%v, want=%v", got, want)
 			}
 		})
@@ -473,7 +474,7 @@ func TestAPIFilePatch(t *testing.T) {
 			status:                      http.StatusOK,
 			filenameExpected:            "renamed.txt",
 			noteExpected:                "original note",
-			expiresExpected:             mustParseExpirationTime("2030-01-01T00:00:00Z"),
+			expiresExpected:             testutil.MustParseExpirationTime(t, "2030-01-01T00:00:00Z"),
 			passphraseProtectedExpected: true,
 		},
 		{
@@ -495,7 +496,7 @@ func TestAPIFilePatch(t *testing.T) {
 			status:                      http.StatusOK,
 			filenameExpected:            "original.txt",
 			noteExpected:                "original note",
-			expiresExpected:             mustParseExpirationTime("2030-01-01T00:00:00Z"),
+			expiresExpected:             testutil.MustParseExpirationTime(t, "2030-01-01T00:00:00Z"),
 			passphraseProtectedExpected: false,
 		},
 		{
@@ -506,7 +507,7 @@ func TestAPIFilePatch(t *testing.T) {
 			status:                      http.StatusBadRequest,
 			filenameExpected:            "original.txt",
 			noteExpected:                "original note",
-			expiresExpected:             mustParseExpirationTime("2030-01-01T00:00:00Z"),
+			expiresExpected:             testutil.MustParseExpirationTime(t, "2030-01-01T00:00:00Z"),
 			passphraseProtectedExpected: true,
 		},
 		{
@@ -517,7 +518,7 @@ func TestAPIFilePatch(t *testing.T) {
 			status:                      http.StatusNotFound,
 			filenameExpected:            "original.txt",
 			noteExpected:                "original note",
-			expiresExpected:             mustParseExpirationTime("2030-01-01T00:00:00Z"),
+			expiresExpected:             testutil.MustParseExpirationTime(t, "2030-01-01T00:00:00Z"),
 			passphraseProtectedExpected: true,
 		},
 		{
@@ -528,7 +529,7 @@ func TestAPIFilePatch(t *testing.T) {
 			status:                      http.StatusForbidden,
 			filenameExpected:            "original.txt",
 			noteExpected:                "original note",
-			expiresExpected:             mustParseExpirationTime("2030-01-01T00:00:00Z"),
+			expiresExpected:             testutil.MustParseExpirationTime(t, "2030-01-01T00:00:00Z"),
 			passphraseProtectedExpected: true,
 		},
 	} {
@@ -548,7 +549,7 @@ func TestAPIFilePatch(t *testing.T) {
 				Filename:           "original.txt",
 				Note:               picoshare.FileNote{Value: &note},
 				Uploaded:           mustParseTime("2025-01-01T00:00:00Z"),
-				Expires:            mustParseExpirationTime("2030-01-01T00:00:00Z"),
+				Expires:            testutil.MustParseExpirationTime(t, "2030-01-01T00:00:00Z"),
 				Size:               mustParseFileSize(len("dummy data")),
 				DownloadPassphrase: mustCreateDownloadPassphrase(t, "secret passphrase"),
 			}); err != nil {

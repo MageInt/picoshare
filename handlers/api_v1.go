@@ -94,7 +94,12 @@ func (s Server) apiFilesPost() http.HandlerFunc {
 				http.Error(w, "Failed to read settings", http.StatusInternalServerError)
 				return
 			}
-			expiration = settings.DefaultFileLifetime.ExpirationFromTime(s.now())
+			expiration, err = settings.DefaultFileLifetime.ExpirationFromTime(s.now())
+			if err != nil {
+				log.Printf("failed to compute default expiration: %v", err)
+				http.Error(w, "Failed to compute default expiration", http.StatusInternalServerError)
+				return
+			}
 		} else {
 			var err error
 			expiration, err = s.parseExpirationFromRequest(r)
@@ -107,7 +112,7 @@ func (s Server) apiFilesPost() http.HandlerFunc {
 
 		id, err := s.insertFileFromRequest(r, expiration, picoshare.GuestLinkID(""))
 		if err != nil {
-			if _, ok := errors.AsType[dbError](err); ok {
+			if _, ok := errors.AsType[*dbError](err); ok {
 				log.Printf("failed to insert uploaded file into data store: %v", err)
 				http.Error(w, "failed to insert file into database", http.StatusInternalServerError)
 			} else {

@@ -47,7 +47,7 @@ func (s Server) entryPost() http.HandlerFunc {
 		// any size they want.
 		id, err := s.insertFileFromRequest(r, expiration, picoshare.GuestLinkID(""))
 		if err != nil {
-			if _, ok := errors.AsType[dbError](err); ok {
+			if _, ok := errors.AsType[*dbError](err); ok {
 				log.Printf("failed to insert uploaded file into data store: %v", err)
 				http.Error(w, "failed to insert file into database", http.StatusInternalServerError)
 			} else {
@@ -109,7 +109,7 @@ func (s Server) guestEntryPost() http.HandlerFunc {
 			return
 		}
 
-		if !gl.IsActive() {
+		if !gl.IsActive(s.now()) {
 			http.Error(w, "Guest link is no longer active", http.StatusUnauthorized)
 			return
 		}
@@ -130,7 +130,7 @@ func (s Server) guestEntryPost() http.HandlerFunc {
 
 		id, err := s.insertFileFromRequest(r, expiration, guestLinkID)
 		if err != nil {
-			if _, ok := errors.AsType[dbError](err); ok {
+			if _, ok := errors.AsType[*dbError](err); ok {
 				log.Printf("failed to insert uploaded file into data store: %v", err)
 				http.Error(w, "failed to insert file into database", http.StatusInternalServerError)
 			} else {
@@ -147,7 +147,9 @@ func (s Server) guestEntryPost() http.HandlerFunc {
 			// and return plaintext.
 			w.Header().Set("Content-Type", "text/plain")
 			if _, err := fmt.Fprintf(w, "%s/-%s\r\n", baseURLFromRequest(r), id.String()); err != nil {
-				log.Fatalf("failed to write HTTP response: %v", err)
+				// Clients can disconnect before reading the response.
+				log.Printf("failed to write HTTP response for entry %s: %v", id.String(), err)
+				return
 			}
 		}
 	}
@@ -271,8 +273,7 @@ func (s Server) insertFileFromRequest(r *http.Request, expiration picoshare.Expi
 			DownloadPassphrase: downloadPassphrase,
 		})
 	if err != nil {
-		log.Printf("failed to save entry: %v", err)
-		return picoshare.EntryID{}, dbError{err}
+		return picoshare.EntryID{}, &dbError{err}
 	}
 
 	return id, nil
@@ -295,7 +296,7 @@ func (s Server) parseGuestExpirationFromRequest(r *http.Request, gl picoshare.Gu
 	// or a command-line utility), default to the maximum allowed expiration for
 	// this guest link.
 	if expirationParam == "" {
-		return gl.MaxFileLifetime.ExpirationFromTime(s.now()), nil
+		return gl.MaxFileLifetime.ExpirationFromTime(s.now())
 	}
 
 	requestedExpiration, err := parse.Expiration(expirationParam, s.now())
@@ -304,10 +305,13 @@ func (s Server) parseGuestExpirationFromRequest(r *http.Request, gl picoshare.Gu
 	}
 
 	// Validate that the requested expiration doesn't exceed the guest link's maximum.
-	maxPermittedExpiration := gl.MaxFileLifetime.ExpirationFromTime(s.now())
+	maxPermittedExpiration, err := gl.MaxFileLifetime.ExpirationFromTime(s.now())
+	if err != nil {
+		return picoshare.ExpirationTime{}, fmt.Errorf("failed to calculate guest link expiration limit: %w", err)
+	}
 
 	// If the requested expiration is beyond the guest link's maximum, reject it.
-	if requestedExpiration.Time().After(maxPermittedExpiration.Time()) {
+	if requestedExpiration.After(maxPermittedExpiration) {
 		return picoshare.ExpirationTime{},
 			fmt.Errorf("requested expiration time of %v is beyond guest link's limit: %v",
 				requestedExpiration,
