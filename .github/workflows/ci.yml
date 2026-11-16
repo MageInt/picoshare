@@ -1,37 +1,92 @@
-# Checks every PR: Go tests and static analysis, then builds the image, starts
-# it and logs in with the shared secret. Nothing is published.
-# Minor and patch Dependabot PRs are then merged and released automatically.
+# Checks every PR: Go tests and static analysis, frontend checks, a Trivy scan
+# of the repository, then builds the image, scans it, starts it and logs in
+# with the shared secret. Nothing is published.
+# Minor and patch Dependabot PRs ("-mineures" groups) are then merged and
+# released automatically.
+# Actions are pinned to a commit SHA and updated by Dependabot.
 name: CI
 
 on:
   pull_request:
     branches: [master]
 
-permissions:
-  contents: read
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
 
       - name: Run Go tests and static analysis
         run: ./dev-scripts/run-go-tests
 
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - name: Run frontend checks (prettier, tsc, eslint, mocha)
+        run: ./dev-scripts/build-frontend
+
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Vulnerable dependencies, secrets and misconfigurations
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scanners: vuln,secret,misconfig
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+
   image:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Build the Docker image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           platforms: linux/amd64
@@ -40,11 +95,19 @@ jobs:
           tags: picoshare:ci
           cache-from: type=gha
 
+      - name: Scan the image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: picoshare:ci
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+
       - name: Start the image and log in
         run: |
           docker run -d --name ps -p 4001:4001 \
             -e PORT=4001 -e PS_SHARED_SECRET=ci-secret picoshare:ci
-          for i in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             if curl -fsS -o /dev/null \
               -H 'Content-Type: application/json' \
               -d '{"sharedSecretKey":"ci-secret"}' \
@@ -56,22 +119,21 @@ jobs:
           docker logs ps
           exit 1
 
-  # Merges only after tests and the image check pass. Major updates are left
-  # for manual review.
+  # Merges the grouped "-mineures" Dependabot PRs (minor and patch) only after
+  # every check passes. Major updates are left for manual review.
   dependabot-merge:
-    needs: [test, image]
-    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    needs: [test, frontend, scan, image]
+    if: >-
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      contains(github.event.pull_request.head.ref, '-mineures')
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: write
       pull-requests: write
       actions: write # start release.yml
     steps:
-      - id: meta
-        uses: dependabot/fetch-metadata@v2
-
       - name: Merge and release
-        if: steps.meta.outputs.update-type != 'version-update:semver-major'
         run: |
           gh pr merge --squash --delete-branch "$PR_URL"
           # A merge made with GITHUB_TOKEN does not trigger the push workflow,

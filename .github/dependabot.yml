@@ -1,5 +1,7 @@
-# Automatic dependency updates. Minor and patch PRs are merged automatically
-# when CI passes (see ci.yml).
+# Automatic dependency updates, every Monday, grouped per ecosystem (major
+# versions in separate PRs), with a 3-day cooldown before a freshly published
+# version is proposed (security updates are not delayed). The "-mineures"
+# groups (minor and patch) are merged automatically when CI passes (see ci.yml).
 version: 2
 updates:
   - package-ecosystem: gomod
@@ -9,11 +11,27 @@ updates:
       day: monday
       time: "03:00"
       timezone: Europe/Paris
+    cooldown:
+      default-days: 3
     groups:
-      go-minor-patch:
+      gomod-mineures:
         update-types: [minor, patch]
 
-  # Base images in the Dockerfile (golang, debian, alpine).
+  # Development tools only (prettier, eslint, tsc, mocha, Playwright).
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "03:00"
+      timezone: Europe/Paris
+    cooldown:
+      default-days: 3
+    groups:
+      npm-mineures:
+        update-types: [minor, patch]
+
+  # Base images in the Dockerfile (golang, alpine).
   - package-ecosystem: docker
     directory: /
     schedule:
@@ -21,11 +39,21 @@ updates:
       day: monday
       time: "03:00"
       timezone: Europe/Paris
+    cooldown:
+      default-days: 3
+    groups:
+      docker-mineures:
+        update-types: [minor, patch]
 
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: monthly
+      interval: weekly
+      day: monday
+      time: "03:00"
+      timezone: Europe/Paris
+    cooldown:
+      default-days: 3
     groups:
-      actions:
-        patterns: ["*"]
+      github-actions-mineures:
+        update-types: [minor, patch]

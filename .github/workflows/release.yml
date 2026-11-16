@@ -1,3 +1,11 @@
+# Release on every push to master:
+# - next version from the Conventional Commits since the last vX.Y.Z tag
+#   (feat → minor, "!" or BREAKING CHANGE → major, anything else → patch);
+#   nothing is released if HEAD is already tagged or if the commit message
+#   contains [skip release];
+# - multi-arch image (linux/amd64, linux/arm64) on GHCR (latest and vX.Y.Z);
+# - GitHub release with generated notes.
+# Actions are pinned to a commit SHA and updated by Dependabot.
 name: Release
 
 on:
@@ -12,6 +20,8 @@ on:
   schedule:
     - cron: "0 4 * * 1"
 
+permissions: {}
+
 # Serialize releases so that two pushes never compute the same version.
 concurrency:
   group: release
@@ -20,32 +30,49 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
 
       - name: Run Go tests and static analysis
         run: ./dev-scripts/run-go-tests
 
-  release:
-    needs: test
+  version:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
-      contents: write
-      packages: write
+      contents: read
+    outputs:
+      release: ${{ steps.version.outputs.release }}
+      version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Fetch all tags to find the latest release version.
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Compute the next version
         id: version
+        env:
+          HEAD_MSG: ${{ github.event.head_commit.message }}
         run: |
           set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" == schedule ]] \
+            || [[ "${HEAD_MSG:-}" == *"[skip release]"* ]] \
+            || git tag --points-at HEAD | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "No new version."
+            echo "release=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
           latest="$(git tag --list 'v*' --sort=-v:refname \
             | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
             | head -n 1 || true)"
@@ -53,38 +80,66 @@ jobs:
           # continue from v1.5.4, the last upstream release in its history.
           latest="${latest:-v1.5.4}"
           IFS='.' read -r major minor patch <<< "${latest#v}"
-          version="v${major}.${minor}.$((patch + 1))"
+          log="$(git log --format='%s%n%b' "${latest}..HEAD")"
+          if grep -qE '^[a-z]+(\([^)]*\))?!:|^BREAKING[ -]CHANGE' <<< "${log}"; then
+            version="v$((major + 1)).0.0"
+          elif grep -qE '^feat(\([^)]*\))?:' <<< "${log}"; then
+            version="v${major}.$((minor + 1)).0"
+          else
+            version="v${major}.${minor}.$((patch + 1))"
+          fi
           echo "Previous version: ${latest}, next version: ${version}"
+          echo "release=true" >> "${GITHUB_OUTPUT}"
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
-          echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "${GITHUB_OUTPUT}"
+
+  release:
+    needs: [test, version]
+    if: github.event_name == 'schedule' || needs.version.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Image name (GHCR requires lowercase)
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}" >> "${GITHUB_ENV}"
 
       # Tag the local checkout before building so that the Go toolchain embeds
       # the release version in the binary.
       - name: Tag the release commit locally
         if: github.event_name != 'schedule'
-        run: git tag "${{ steps.version.outputs.version }}"
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: git tag "${VERSION}"
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
 
-      - uses: docker/login-action@v3
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push the Docker image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
-          platforms: linux/amd64
+          platforms: linux/amd64,linux/arm64
           push: true
           pull: true
           # Without cache on the weekly rebuild, or the apk upgrade layer would
           # never change.
           no-cache: ${{ github.event_name == 'schedule' }}
           tags: |
-            ${{ steps.version.outputs.image }}:latest
-            ${{ github.event_name != 'schedule' && format('{0}:{1}', steps.version.outputs.image, steps.version.outputs.version) || '' }}
+            ${{ env.IMAGE }}:latest
+            ${{ github.event_name != 'schedule' && format('{0}:{1}', env.IMAGE, needs.version.outputs.version) || '' }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -92,15 +147,15 @@ jobs:
         if: github.event_name != 'schedule'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VERSION: ${{ steps.version.outputs.version }}
-          IMAGE: ${{ steps.version.outputs.image }}
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
           set -euo pipefail
           gh release create "${VERSION}" \
+            --repo "${GITHUB_REPOSITORY}" \
             --target "${GITHUB_SHA}" \
             --title "${VERSION}" \
             --generate-notes \
             --notes "$(printf '%s\n\n%s\n\n%s\n' \
               '## Docker image' \
-              "Platform: linux/amd64" \
+              "Platforms: linux/amd64, linux/arm64" \
               "\`docker pull ${IMAGE}:${VERSION}\`")"
