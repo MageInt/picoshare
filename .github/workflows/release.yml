@@ -4,7 +4,8 @@
 #   nothing is released if HEAD is already tagged or if the commit message
 #   contains [skip release];
 # - multi-arch image (linux/amd64, linux/arm64) on GHCR (latest and vX.Y.Z);
-# - GitHub release with generated notes.
+# - GitHub release with generated notes;
+# - GHCR cleanup after every publication, including the weekly rebuild.
 # Actions are pinned to a commit SHA and updated by Dependabot.
 name: Release
 
@@ -15,10 +16,10 @@ on:
   # Manual runs (including those started after a Dependabot merge) make a
   # normal release.
   workflow_dispatch:
-  # Weekly rebuild without cache to pick up Go and Alpine security fixes. It
-  # only refreshes the latest tag and creates no new version.
+  # Weekly rebuild without cache (Sunday) to pick up Go and Alpine security
+  # fixes. It only refreshes the latest tag and creates no new version.
   schedule:
-    - cron: "0 4 * * 1"
+    - cron: "17 4 * * 0"
 
 permissions: {}
 
@@ -159,3 +160,26 @@ jobs:
               '## Docker image' \
               "Platforms: linux/amd64, linux/arm64" \
               "\`docker pull ${IMAGE}:${VERSION}\`")"
+
+  # Prunes GHCR after every publication: keeps the 10 newest tagged images (and
+  # latest), deletes untagged images, orphaned attestations and incomplete
+  # multi-arch images. ghcr-cleanup-action handles multi-arch indexes, unlike
+  # actions/delete-package-versions which breaks them.
+  cleanup:
+    needs: [release]
+    if: ${{ !cancelled() && needs.release.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      packages: write
+    steps:
+      - name: Old image versions
+        uses: dataaxiom/ghcr-cleanup-action@d52806a0dc70b430571a37da1fde39733ffd640f # v1.2.2
+        with:
+          package: picoshare
+          keep-n-tagged: 10
+          exclude-tags: latest
+          delete-untagged: true
+          delete-orphaned-images: true
+          delete-ghost-images: true
+          delete-partial-images: true
